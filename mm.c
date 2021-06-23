@@ -95,6 +95,7 @@ team_t team = {
 #define BP_LARGER_EQUAL(bp, size) (GET_SIZE(HDRP(bp)) >= size)
 
 static char *heap_listp = 0; /* Pointer to the prologue block */
+static char *last_listp = 0; /* Pointer to the block that fitted last time */
 
 static void *extend_heap(size_t words);
 
@@ -117,6 +118,7 @@ int mm_init(void) {
   PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
   PUT(heap_listp + (3 * WSIZE), PACK(0, 1));     /* Epilogue header */
   heap_listp += (2 * WSIZE);
+  last_listp = NEXT_BLKP(heap_listp);
 
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL) {
@@ -184,10 +186,18 @@ void *mm_malloc(size_t size) {
  * find_fit - Perform a first-fit search of the implicit free list.
  */
 void *find_fit(size_t asize) {
-  char *ptr = NEXT_BLKP(heap_listp);
+  char *ptr = last_listp;
   size_t size;
   while ((size = GET_SIZE(HDRP(ptr))) > 0) {
     if (!GET_ALLOC(HDRP(ptr)) && size >= asize) {
+      return ptr;
+    }
+    ptr = NEXT_BLKP(ptr);
+  }
+
+  ptr = NEXT_BLKP(heap_listp);
+  while (ptr != last_listp) {
+    if (!GET_ALLOC(HDRP(ptr)) && (size = GET_SIZE(HDRP(ptr))) >= asize) {
       return ptr;
     }
     ptr = NEXT_BLKP(ptr);
@@ -212,6 +222,7 @@ void place(void *bp, size_t asize) {
     PUT(FTRP(next), PACK(next_size, 0));
   }
   SET_ALLOC(FTRP(bp));
+  last_listp = bp;
 }
 
 /*
@@ -231,7 +242,7 @@ static void *coalesce(void *bp) {
   size_t size = GET_SIZE(HDRP(bp));
 
   if (prev_alloc && next_alloc) { /* Case 1 */
-    return bp;
+    return last_listp = bp;
   }
 
   else if (prev_alloc && !next_alloc) { /* Case 2 */
@@ -254,7 +265,7 @@ static void *coalesce(void *bp) {
     bp = PREV_BLKP(bp);
   }
 
-  return bp;
+  return last_listp = bp;
 }
 
 /*
