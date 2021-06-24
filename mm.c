@@ -87,14 +87,39 @@ team_t team = {
 #define PRED_PTR(ptr) ((char *)(ptr))
 #define SUCC_PTR(ptr) ((char *)(ptr) + WSIZE)
 
-// Address of free block's predecessor and successor on the segregated list
-#define PRED(ptr) (*(char **)(ptr))
-#define SUCC(ptr) (*(char **)(SUCC_PTR(ptr)))
-
 #define BP_SMALLER(bp, size) (GET_SIZE(HDRP(bp)) < size)
 #define BP_LARGER_EQUAL(bp, size) (GET_SIZE(HDRP(bp)) >= size)
 
 static char *heap_listp = 0; /* Pointer to the prologue block */
+
+static char *free_list_head = 0; /* Pointer to the head of explicit free list*/
+
+// Address of free block's predecessor and successor
+#define PRED(ptr) (char *)(free_list_head + GET(PRED_PTR(ptr)))
+#define SUCC(ptr) (char *)(free_list_head + GET(SUCC_PTR(ptr)))
+
+#define OFFSET(ptr) ((char *)(ptr)-free_list_head)
+
+// Set blocks's predecessor and successor entries
+#define SET_PRED(self, ptr) PUT(PRED_PTR(self), OFFSET(ptr))
+#define SET_SUCC(self, ptr) PUT(SUCC_PTR(self), OFFSET(ptr))
+
+// Link ptr1 and ptr2 as ptr1 is predecessor of ptr2
+#define LINK(ptr1, ptr2)  \
+  do {                    \
+    SET_SUCC(ptr1, ptr2); \
+    SET_PRED(ptr2, ptr1); \
+  } while (0)
+
+// Remove ptr from linked list
+#define ERASE(ptr) LINK(PRED(ptr), SUCC(ptr))
+
+// Insert target as successor
+#define INSERT(self, target)  \
+  do {                        \
+    LINK(target, SUCC(self)); \
+    LINK(self, target);       \
+  } while (0)
 
 static void *extend_heap(size_t words);
 
@@ -109,19 +134,23 @@ static void place(void *bp, size_t asize);
  */
 int mm_init(void) {
   /* Create the initial empty heap */
-  if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1) {
+  if ((heap_listp = mem_sbrk(6 * WSIZE)) == (void *)-1) {
     return -1;
   }
-  PUT(heap_listp, 0);                            /* Alignment padding */
-  PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1)); /* Prologue header */
-  PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
-  PUT(heap_listp + (3 * WSIZE), PACK(0, 1));     /* Epilogue header */
-  heap_listp += (2 * WSIZE);
+  free_list_head = heap_listp + WSIZE; /* Init head ptr */
+  PUT(heap_listp, 0);                  /* Alignment padding */
+  PUT(heap_listp + WSIZE, 0);
+  PUT(heap_listp + (2 * WSIZE), 0);
+  PUT(heap_listp + (3 * WSIZE), PACK(DSIZE, 1)); /* Prologue header */
+  PUT(heap_listp + (4 * WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
+  PUT(heap_listp + (5 * WSIZE), PACK(0, 1));     /* Epilogue header */
+  heap_listp += (4 * WSIZE);
 
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL) {
     return -1;
   }
+  INSERT(free_list_head, NEXT_BLKP(heap_listp));
   return 0;
 }
 
@@ -176,6 +205,7 @@ void *mm_malloc(size_t size) {
   if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
     return NULL;
   }
+  INSERT(free_list_head, bp);
   place(bp, asize);
   return bp;
 }
@@ -184,13 +214,29 @@ void *mm_malloc(size_t size) {
  * find_fit - Perform a first-fit search of the implicit free list.
  */
 void *find_fit(size_t asize) {
-  char *ptr = NEXT_BLKP(heap_listp);
-  size_t size;
-  while ((size = GET_SIZE(HDRP(ptr))) > 0) {
-    if (!GET_ALLOC(HDRP(ptr)) && size >= asize) {
+  char *ptr = free_list_head;
+#ifdef DEBUG
+  printf("head ptr = %p\n", ptr);
+  printf("cur = %p, pred = %p, succ = %p\n", ptr, PRED(ptr), SUCC(ptr));
+  int cnt = 0;
+#endif
+  while ((ptr = SUCC(ptr)) != free_list_head) {
+#ifdef DEBUG
+    cnt++;
+    if (cnt == 10000) exit(1);
+    printf("cur = %p, pred = %p, succ = %p\n", ptr, PRED(ptr), SUCC(ptr));
+#endif
+    if (GET_SIZE(HDRP(ptr)) >= asize) {
+#ifdef DEBUG
+      printf("[fit]  allocated = %d, addr = %p, size = %u, asize = %u\n",
+             GET_ALLOC(HDRP(ptr)), ptr, GET_SIZE(HDRP(ptr)), asize);
+#endif
       return ptr;
     }
-    ptr = NEXT_BLKP(ptr);
+#ifdef DEBUG
+    printf("[skip]  allocated = %d, addr = %p, size = %u, asize = %u\n",
+           GET_ALLOC(HDRP(ptr)), ptr, GET_SIZE(HDRP(ptr)), asize);
+#endif
   }
   return NULL;
 }
@@ -201,6 +247,12 @@ void *find_fit(size_t asize) {
  * block size.
  */
 void place(void *bp, size_t asize) {
+#ifdef DEBUG
+  printf("\n[before place] ptr is %p, pred = %p, succ = %p\n", bp, PRED(bp),
+         SUCC(bp));
+  printf("checking list...\n ");
+  find_fit(1 << 31);
+#endif
   SET_ALLOC(HDRP(bp));
   size_t size = GET_SIZE(HDRP(bp));
   if (size > asize && size - asize >= 2 * DSIZE) {
@@ -210,8 +262,18 @@ void place(void *bp, size_t asize) {
     char *next = NEXT_BLKP(bp);
     PUT(HDRP(next), PACK(next_size, 0));
     PUT(FTRP(next), PACK(next_size, 0));
+    INSERT(free_list_head, next);
+#ifdef DEBUG
+    printf("[splitting] next ptr is %p, checking list...\n", next);
+    find_fit(1 << 31);
+#endif
   }
   SET_ALLOC(FTRP(bp));
+  ERASE(bp);
+#ifdef DEBUG
+  printf("[after place] checking list...\n ");
+  find_fit(1 << 31);
+#endif
 }
 
 /*
@@ -222,7 +284,16 @@ void mm_free(void *ptr) {
 
   PUT(HDRP(ptr), PACK(size, 0));
   PUT(FTRP(ptr), PACK(size, 0));
-  coalesce(ptr);
+#ifdef DEBUG
+  printf("\n[before free] ptr is %p, checking list...\n", ptr);
+  find_fit(1 << 31);
+#endif
+  ptr = coalesce(ptr);
+  INSERT(free_list_head, ptr);
+#ifdef DEBUG
+  printf("[after free] ptr is %p, checking list...\n", ptr);
+  find_fit(1 << 31);
+#endif
 }
 
 static void *coalesce(void *bp) {
@@ -235,6 +306,7 @@ static void *coalesce(void *bp) {
   }
 
   else if (prev_alloc && !next_alloc) { /* Case 2 */
+    ERASE(NEXT_BLKP(bp));
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size, 0));
@@ -245,13 +317,16 @@ static void *coalesce(void *bp) {
     PUT(FTRP(bp), PACK(size, 0));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
     bp = PREV_BLKP(bp);
+    ERASE(bp);
   }
 
   else { /* Case 4 */
+    ERASE(NEXT_BLKP(bp));
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
     PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
     bp = PREV_BLKP(bp);
+    ERASE(bp);
   }
 
   return bp;
