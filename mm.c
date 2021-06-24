@@ -335,17 +335,38 @@ static void *coalesce(void *bp) {
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
 void *mm_realloc(void *ptr, size_t size) {
-  void *oldptr = ptr;
+  if (ptr == NULL && size == 0) {
+    return NULL;
+  }
   void *newptr;
-  size_t copySize;
+  size_t copysize;
+  size_t asize;
+  if (size <= DSIZE) {
+    asize = 2 * DSIZE;
+  } else {
+    asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+  }
+
+  size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
+  size_t blocksize =
+      GET_SIZE(HDRP(ptr)) + (next_alloc ? 0 : GET_SIZE(HDRP(NEXT_BLKP(ptr))));
+  if (blocksize >= asize) {
+    if (!next_alloc) {
+      ERASE(NEXT_BLKP(ptr));
+      SET_SIZE(HDRP(ptr), blocksize);
+      SET_SIZE(FTRP(ptr), blocksize);
+    }
+    place(ptr, asize);
+    return ptr;
+  }
 
   newptr = mm_malloc(size);
   if (ptr == NULL || newptr == NULL) {
     return newptr;
   }
 
-  copySize = MIN(GET_SIZE(HDRP(ptr)), GET_SIZE(HDRP(newptr)));
-  memcpy(newptr, oldptr, copySize - WSIZE);
-  mm_free(oldptr);
+  copysize = MIN(GET_SIZE(HDRP(ptr)), GET_SIZE(HDRP(newptr)));
+  memcpy(newptr, ptr, copysize - WSIZE);
+  mm_free(ptr);
   return newptr;
 }
