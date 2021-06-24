@@ -205,7 +205,6 @@ void *mm_malloc(size_t size) {
   if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
     return NULL;
   }
-  INSERT(free_list_head, bp);
   place(bp, asize);
   return bp;
 }
@@ -231,6 +230,7 @@ void *find_fit(size_t asize) {
       printf("[fit]  allocated = %d, addr = %p, size = %u, asize = %u\n",
              GET_ALLOC(HDRP(ptr)), ptr, GET_SIZE(HDRP(ptr)), asize);
 #endif
+      ERASE(ptr);
       return ptr;
     }
 #ifdef DEBUG
@@ -269,7 +269,6 @@ void place(void *bp, size_t asize) {
 #endif
   }
   SET_ALLOC(FTRP(bp));
-  ERASE(bp);
 #ifdef DEBUG
   printf("[after place] checking list...\n ");
   find_fit(1 << 31);
