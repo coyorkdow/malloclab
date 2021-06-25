@@ -25,7 +25,7 @@
  ********************************************************/
 team_t team = {
     /* Team name */
-    "individaul",
+    "individual",
     /* First member's full name */
     "coyorkdow",
     /* First member's email address */
@@ -121,6 +121,103 @@ static char *free_list_head = 0; /* Pointer to the head of explicit free list*/
     LINK(self, target);       \
   } while (0)
 
+/*********************************************************
+ *        Binary Search Tree Definition Begin
+ ********************************************************/
+
+#define LCH(ptr) PRED(ptr)
+#define RCH(ptr) SUCC(ptr)
+
+#define PARENT_PTR(ptr) ((char *)(ptr) + (2 * WSIZE))
+#define PARENT(ptr) (char *)(free_list_head + GET(PARENT_PTR(ptr)))
+
+#define SET_LCH(self, ptr) SET_PRED(self, ptr)
+#define SET_RCH(self, ptr) SET_SUCC(self, ptr)
+#define SET_PARENT(self, ptr) PUT(PARENT_PTR(self), OFFSET(ptr))
+
+char *NIL = 0; /* NIL must be initialized before use any of BST */
+
+/* Replaces subtree u as a child of its parent with subtree v. */
+#define TRANSPLANT(root, u, v)              \
+  do {                                      \
+    if (PARENT(u) == NIL) {                 \
+      *(root) = v;                          \
+    } else if (u == LCH(PARENT(u))) {       \
+      SET_LCH(PARENT(u), v);                \
+    } else {                                \
+      SET_RCH(PARENT(u), v);                \
+    }                                       \
+    if (v != NIL) SET_PARENT(v, PARENT(u)); \
+  } while (0)
+
+static char *tree_lower_bound(char *root, size_t size) {
+  char *r = NIL;
+  char *ptr = root;
+  while (ptr != NIL && size != GET_SIZE(HDRP(ptr))) {
+    if (GET_SIZE(HDRP(ptr)) < size) {
+      ptr = RCH(ptr);
+    } else {
+      r = ptr;
+      ptr = LCH(ptr);
+    }
+  }
+  // If r is not NIL, then it points to the first block whose capacity is not
+  // less than {size}.
+  if (ptr != NIL && GET_SIZE(HDRP(ptr)) == size) {
+    return ptr;
+  } else {
+    return r;
+  }
+}
+
+static void tree_insert(char **root, char *ptr) {
+  SET_LCH(ptr, NIL);
+  SET_RCH(ptr, NIL);
+  char *y = NIL;
+  char *r = NIL;
+  char *x = *root;
+  size_t size = GET_SIZE(HDRP(ptr));
+  while (x != NIL) {
+    y = x;
+    if (GET_SIZE(HDRP(x)) < size) {
+      x = RCH(x);
+    } else {
+      x = LCH(x);
+    }
+  }
+  SET_PARENT(ptr, y);
+  if (y == NIL) {
+    *root = ptr;
+  } else if (GET_SIZE(HDRP(y)) < size) {
+    SET_RCH(y, ptr);
+  } else {
+    SET_LCH(y, ptr);
+  }
+}
+
+static void tree_erase(char **root, char *ptr) {
+  if (LCH(ptr) == NIL) {
+    TRANSPLANT(root, ptr, RCH(ptr));
+  } else if (RCH(ptr) == NIL) {
+    TRANSPLANT(root, ptr, LCH(ptr));
+  } else {
+    char *y = RCH(ptr);
+    while (y != NIL) y = LCH(y);
+    // y is the minimum node in subtree RCH(ptr), it may has RCH but has no LCH.
+    if (PARENT(y) != ptr) {
+      TRANSPLANT(root, y, RCH(y));
+      SET_RCH(y, RCH(ptr));
+      SET_PARENT(RCH(y), y);
+    }
+    TRANSPLANT(root, ptr, y);
+    SET_LCH(y, LCH(ptr));
+    SET_PARENT(LCH(y), y);
+  }
+}
+/*********************************************************
+ *        Binary Search Tree Definition End
+ ********************************************************/
+
 static void *extend_heap(size_t words);
 
 static void *coalesce(void *bp);
@@ -138,6 +235,7 @@ int mm_init(void) {
     return -1;
   }
   free_list_head = heap_listp + WSIZE; /* Init head ptr */
+  NIL = free_list_head;                /* Init NIL, which is used in BST */
   PUT(heap_listp, 0);                  /* Alignment padding */
   PUT(heap_listp + WSIZE, 0);
   PUT(heap_listp + (2 * WSIZE), 0);
