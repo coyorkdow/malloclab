@@ -35,6 +35,12 @@ team_t team = {
     /* Second member's email address (leave blank if none) */
     ""};
 
+#define DEBUG_INFO(f_, ...)      \
+  do {                           \
+    printf((f_), ##__VA_ARGS__); \
+    fflush(stdout);              \
+  } while (0)
+
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
 
@@ -43,12 +49,11 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-
 #define WSIZE 4  // word and header/footer size (bytes)
 #define DSIZE 8  // double word size (bytes)
-#define INITCHUNKSIZE (1 << 6)
 #define CHUNKSIZE (1 << 12)
+
+#define MINIMUM_TREE_BLOCK_SIZE (3 * DSIZE)
 
 #define SEG_LIST_NUM 20
 #define REALLOC_BUFFER (1 << 7)
@@ -87,8 +92,10 @@ team_t team = {
 #define PRED_PTR(ptr) ((char *)(ptr))
 #define SUCC_PTR(ptr) ((char *)(ptr) + WSIZE)
 
-#define BP_SMALLER(bp, size) (GET_SIZE(HDRP(bp)) < size)
-#define BP_LARGER_EQUAL(bp, size) (GET_SIZE(HDRP(bp)) >= size)
+#define BP_LESS(bp, size) (GET_SIZE(HDRP(bp)) < size)
+#define BP_GREATER(bp, size) (GET_SIZE(HDRP(bp)) > size)
+#define BP_GEQ(bp, size) (!BP_LESS(bp, size))
+#define BP_LEQ(bp, size) (!BP_GREATER(bp, size))
 
 static char *heap_listp = 0; /* Pointer to the prologue block */
 
@@ -153,10 +160,24 @@ char *NIL = 0; /* NIL must be initialized before use any of BST */
 static char *tree_lower_bound(char *root, size_t size) {
   char *r = NIL;
   char *ptr = root;
+#ifdef DEBUG
+  DEBUG_INFO("\n[tree lower_bound] NIL is %p, root is %p, size = %u\n", NIL,
+             root, size);
+#endif
   while (ptr != NIL && size != GET_SIZE(HDRP(ptr))) {
+#ifdef DEBUG
+    DEBUG_INFO("ptr = %p, lch = %p, rch = %p, parent = %p, size = %u", ptr,
+               LCH(ptr), RCH(ptr), PARENT(ptr), GET_SIZE(HDRP(ptr)));
+#endif
     if (GET_SIZE(HDRP(ptr)) < size) {
+#ifdef DEBUG
+      DEBUG_INFO("  to rch\n");
+#endif
       ptr = RCH(ptr);
     } else {
+#ifdef DEBUG
+      DEBUG_INFO("  to lch\n");
+#endif
       r = ptr;
       ptr = LCH(ptr);
     }
@@ -171,17 +192,30 @@ static char *tree_lower_bound(char *root, size_t size) {
 }
 
 static void tree_insert(char **root, char *ptr) {
+#ifdef DEBUG
+  DEBUG_INFO("\n[tree insert] NIL is %p, root is %p, ptr = %p\n", NIL, root,
+             ptr);
+#endif
   SET_LCH(ptr, NIL);
   SET_RCH(ptr, NIL);
   char *y = NIL;
-  char *r = NIL;
   char *x = *root;
   size_t size = GET_SIZE(HDRP(ptr));
   while (x != NIL) {
+#ifdef DEBUG
+    DEBUG_INFO("x = %p, lch = %p, rch = %p, parent = %p, size = %u", x, LCH(x),
+               RCH(x), PARENT(x), GET_SIZE(HDRP(x)));
+#endif
     y = x;
     if (GET_SIZE(HDRP(x)) < size) {
+#ifdef DEBUG
+      DEBUG_INFO("  to rch\n");
+#endif
       x = RCH(x);
     } else {
+#ifdef DEBUG
+      DEBUG_INFO("  to lch\n");
+#endif
       x = LCH(x);
     }
   }
@@ -202,7 +236,7 @@ static void tree_erase(char **root, char *ptr) {
     TRANSPLANT(root, ptr, LCH(ptr));
   } else {
     char *y = RCH(ptr);
-    while (y != NIL) y = LCH(y);
+    while (LCH(y) != NIL) y = LCH(y);
     // y is the minimum node in subtree RCH(ptr), it may has RCH but has no LCH.
     if (PARENT(y) != ptr) {
       TRANSPLANT(root, y, RCH(y));
@@ -217,6 +251,16 @@ static void tree_erase(char **root, char *ptr) {
 /*********************************************************
  *        Binary Search Tree Definition End
  ********************************************************/
+
+static char *tree_root = 0;
+
+#define ERASE_FROM_TREE_OR_LIST(root, bp)     \
+  do {                                        \
+    if (BP_LESS(bp, MINIMUM_TREE_BLOCK_SIZE)) \
+      ERASE(bp);                              \
+    else                                      \
+      tree_erase(root, bp);                   \
+  } while (0)
 
 static void *extend_heap(size_t words);
 
@@ -236,7 +280,8 @@ int mm_init(void) {
   }
   free_list_head = heap_listp + WSIZE; /* Init head ptr */
   NIL = free_list_head;                /* Init NIL, which is used in BST */
-  PUT(heap_listp, 0);                  /* Alignment padding */
+  tree_root = NIL;
+  PUT(heap_listp, 0); /* Alignment padding */
   PUT(heap_listp + WSIZE, 0);
   PUT(heap_listp + (2 * WSIZE), 0);
   PUT(heap_listp + (3 * WSIZE), PACK(DSIZE, 1)); /* Prologue header */
@@ -248,7 +293,11 @@ int mm_init(void) {
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL) {
     return -1;
   }
-  INSERT(free_list_head, NEXT_BLKP(heap_listp));
+  if (BP_LESS(NEXT_BLKP(heap_listp), MINIMUM_TREE_BLOCK_SIZE)) {
+    INSERT(free_list_head, NEXT_BLKP(heap_listp));
+  } else {
+    tree_insert(&tree_root, NEXT_BLKP(heap_listp));
+  }
   return 0;
 }
 
@@ -292,13 +341,23 @@ void *mm_malloc(size_t size) {
     asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
 
   /* Search the free list for a fit */
-  if ((bp = find_fit(asize)) != NULL) {
+  if (asize < MINIMUM_TREE_BLOCK_SIZE && (bp = find_fit(asize)) != NULL) {
+    place(bp, asize);
+    return bp;
+  }
+
+  /* Search the BST */
+  if ((bp = tree_lower_bound(tree_root, asize)) != NIL) {
+    tree_erase(&tree_root, bp);
     place(bp, asize);
     return bp;
   }
 
   /* No fit found. Get more memory and place the block */
 
+#ifdef DEBUG
+  DEBUG_INFO("No fit found. Get more memory and place the block\n");
+#endif
   extendsize = MAX(asize, CHUNKSIZE);
   if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
     return NULL;
@@ -313,27 +372,29 @@ void *mm_malloc(size_t size) {
 void *find_fit(size_t asize) {
   char *ptr = free_list_head;
 #ifdef DEBUG
-  printf("head ptr = %p\n", ptr);
-  printf("cur = %p, pred = %p, succ = %p\n", ptr, PRED(ptr), SUCC(ptr));
+  DEBUG_INFO("head ptr = %p\n", ptr);
+  DEBUG_INFO("cur = %p, pred = %p, succ = %p\n", ptr, PRED(ptr), SUCC(ptr));
   int cnt = 0;
 #endif
   while ((ptr = SUCC(ptr)) != free_list_head) {
 #ifdef DEBUG
     cnt++;
     if (cnt == 10000) exit(1);
-    printf("cur = %p, pred = %p, succ = %p\n", ptr, PRED(ptr), SUCC(ptr));
+    DEBUG_INFO("cur = %p, pred = %p, succ = %p\n", ptr, PRED(ptr), SUCC(ptr));
 #endif
     if (GET_SIZE(HDRP(ptr)) >= asize) {
 #ifdef DEBUG
-      printf("[fit]  allocated = %d, addr = %p, size = %u, asize = %u\n",
-             GET_ALLOC(HDRP(ptr)), ptr, GET_SIZE(HDRP(ptr)), asize);
+      DEBUG_INFO("[fit]  allocated = %d, addr = %p, size = %u, asize = %u\n",
+                 GET_ALLOC(HDRP(ptr)), ptr, GET_SIZE(HDRP(ptr)), asize);
+      if (GET_SIZE(HDRP(ptr)) >= MINIMUM_TREE_BLOCK_SIZE) exit(1);
 #endif
       ERASE(ptr);
       return ptr;
     }
 #ifdef DEBUG
-    printf("[skip]  allocated = %d, addr = %p, size = %u, asize = %u\n",
-           GET_ALLOC(HDRP(ptr)), ptr, GET_SIZE(HDRP(ptr)), asize);
+    DEBUG_INFO("[skip]  allocated = %d, addr = %p, size = %u, asize = %u\n",
+               GET_ALLOC(HDRP(ptr)), ptr, GET_SIZE(HDRP(ptr)), asize);
+    if (GET_SIZE(HDRP(ptr)) >= MINIMUM_TREE_BLOCK_SIZE) exit(1);
 #endif
   }
   return NULL;
@@ -346,9 +407,9 @@ void *find_fit(size_t asize) {
  */
 void place(void *bp, size_t asize) {
 #ifdef DEBUG
-  printf("\n[before place] ptr is %p, pred = %p, succ = %p\n", bp, PRED(bp),
-         SUCC(bp));
-  printf("checking list...\n ");
+  DEBUG_INFO("\n[before place] ptr is %p, size = %u, pred = %p, succ = %p\n",
+             bp, GET_SIZE(HDRP(bp)), PRED(bp), SUCC(bp));
+  DEBUG_INFO("checking list...\n ");
   find_fit(1 << 31);
 #endif
   SET_ALLOC(HDRP(bp));
@@ -360,15 +421,22 @@ void place(void *bp, size_t asize) {
     char *next = NEXT_BLKP(bp);
     PUT(HDRP(next), PACK(next_size, 0));
     PUT(FTRP(next), PACK(next_size, 0));
-    INSERT(free_list_head, next);
+    if (next_size < MINIMUM_TREE_BLOCK_SIZE) {
+      INSERT(free_list_head, next);
+    } else {
+      tree_insert(&tree_root, next);
+    }
 #ifdef DEBUG
-    printf("[splitting] next ptr is %p, checking list...\n", next);
+    DEBUG_INFO(
+        "[splitting] next ptr is %p, asize = %u, next_size = %u, checking "
+        "list...\n",
+        next, asize, next_size);
     find_fit(1 << 31);
 #endif
   }
   SET_ALLOC(FTRP(bp));
 #ifdef DEBUG
-  printf("[after place] checking list...\n ");
+  DEBUG_INFO("[after place] checking list...\n ");
   find_fit(1 << 31);
 #endif
 }
@@ -382,13 +450,17 @@ void mm_free(void *ptr) {
   PUT(HDRP(ptr), PACK(size, 0));
   PUT(FTRP(ptr), PACK(size, 0));
 #ifdef DEBUG
-  printf("\n[before free] ptr is %p, checking list...\n", ptr);
+  DEBUG_INFO("\n[before free] ptr is %p, checking list...\n", ptr);
   find_fit(1 << 31);
 #endif
   ptr = coalesce(ptr);
-  INSERT(free_list_head, ptr);
+  if (BP_LESS(ptr, MINIMUM_TREE_BLOCK_SIZE)) {
+    INSERT(free_list_head, ptr);
+  } else {
+    tree_insert(&tree_root, ptr);
+  }
 #ifdef DEBUG
-  printf("[after free] ptr is %p, checking list...\n", ptr);
+  DEBUG_INFO("[after free] ptr is %p, checking list...\n", ptr);
   find_fit(1 << 31);
 #endif
 }
@@ -400,30 +472,24 @@ static void *coalesce(void *bp) {
 
   if (prev_alloc && next_alloc) { /* Case 1 */
     return bp;
-  }
-
-  else if (prev_alloc && !next_alloc) { /* Case 2 */
-    ERASE(NEXT_BLKP(bp));
+  } else if (prev_alloc && !next_alloc) { /* Case 2 */
+    ERASE_FROM_TREE_OR_LIST(&tree_root, NEXT_BLKP(bp));
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size, 0));
-  }
-
-  else if (!prev_alloc && next_alloc) { /* Case 3 */
+  } else if (!prev_alloc && next_alloc) { /* Case 3 */
+    ERASE_FROM_TREE_OR_LIST(&tree_root, PREV_BLKP(bp));
     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
     PUT(FTRP(bp), PACK(size, 0));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
     bp = PREV_BLKP(bp);
-    ERASE(bp);
-  }
-
-  else { /* Case 4 */
-    ERASE(NEXT_BLKP(bp));
+  } else { /* Case 4 */
+    ERASE_FROM_TREE_OR_LIST(&tree_root, NEXT_BLKP(bp));
+    ERASE_FROM_TREE_OR_LIST(&tree_root, PREV_BLKP(bp));
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
     PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
     PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
     bp = PREV_BLKP(bp);
-    ERASE(bp);
   }
 
   return bp;
@@ -450,7 +516,7 @@ void *mm_realloc(void *ptr, size_t size) {
       GET_SIZE(HDRP(ptr)) + (next_alloc ? 0 : GET_SIZE(HDRP(NEXT_BLKP(ptr))));
   if (blocksize >= asize) {
     if (!next_alloc) {
-      ERASE(NEXT_BLKP(ptr));
+      ERASE_FROM_TREE_OR_LIST(&tree_root, NEXT_BLKP(ptr));
       SET_SIZE(HDRP(ptr), blocksize);
       SET_SIZE(FTRP(ptr), blocksize);
     }
