@@ -98,7 +98,8 @@ team_t team = {
 #define BP_GEQ(bp, size) (!BP_LESS(bp, size))
 #define BP_LEQ(bp, size) (!BP_GREATER(bp, size))
 
-static char *heap_listp = 0; /* Pointer to the prologue block */
+static char *heap_listp = 0;    /* Pointer to the prologue block */
+static char *heap_epilogue = 0; /* Pointer to the epilogue block */
 
 static char *free_list_head = 0; /* Pointer to the head of explicit free list*/
 
@@ -272,7 +273,7 @@ static void *find_fit(size_t asize);
 static void *place(void *bp, size_t asize, bool split_back);
 
 /* Check if split free block from the back of the old block */
-#define SPLIT_BACK(asize, next_size) (asize < 128 || next_size < 64)
+#define SPLIT_BACK(asize, next_size) (asize < 96 || next_size < 48)
 
 /*
  * mm_init - initialize the malloc package.
@@ -319,6 +320,7 @@ static void *extend_heap(size_t words) {
   PUT(HDRP(bp), PACK(size, 0));         /* Free block header */
   PUT(FTRP(bp), PACK(size, 0));         /* Free block footer */
   PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
+  heap_epilogue = HDRP(NEXT_BLKP(bp));
 
   /* Coalesce if the previous block was free */
   return coalesce(bp);
@@ -361,6 +363,9 @@ void *mm_malloc(size_t size) {
   DEBUG_INFO("No fit found. Get more memory and place the block\n");
 #endif
   extendsize = MAX(asize, CHUNKSIZE);
+  if (!GET_ALLOC(heap_epilogue - WSIZE)) {
+    extendsize -= GET_SIZE(heap_epilogue - WSIZE);
+  }
   if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
     return NULL;
   }
