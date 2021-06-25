@@ -12,6 +12,7 @@
 #include "mm.h"
 
 #include <assert.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -268,7 +269,10 @@ static void *coalesce(void *bp);
 
 static void *find_fit(size_t asize);
 
-static void place(void *bp, size_t asize);
+static void *place(void *bp, size_t asize, bool split_back);
+
+/* Check if split free block from the back of the old block */
+#define SPLIT_BACK(asize, next_size) (asize < 128 || next_size < 64)
 
 /*
  * mm_init - initialize the malloc package.
@@ -342,15 +346,13 @@ void *mm_malloc(size_t size) {
 
   /* Search the free list for a fit */
   if (asize < MINIMUM_TREE_BLOCK_SIZE && (bp = find_fit(asize)) != NULL) {
-    place(bp, asize);
-    return bp;
+    return place(bp, asize, false);
   }
 
   /* Search the BST */
   if ((bp = tree_lower_bound(tree_root, asize)) != NIL) {
     tree_erase(&tree_root, bp);
-    place(bp, asize);
-    return bp;
+    return place(bp, asize, false);
   }
 
   /* No fit found. Get more memory and place the block */
@@ -362,8 +364,7 @@ void *mm_malloc(size_t size) {
   if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
     return NULL;
   }
-  place(bp, asize);
-  return bp;
+  return place(bp, asize, false);
 }
 
 /*
@@ -405,7 +406,7 @@ void *find_fit(size_t asize) {
  * splitting only if the size of the remainder would equal or exceed the minimum
  * block size.
  */
-void place(void *bp, size_t asize) {
+void *place(void *bp, size_t asize, bool split_back) {
 #ifdef DEBUG
   DEBUG_INFO("\n[before place] ptr is %p, size = %u, pred = %p, succ = %p\n",
              bp, GET_SIZE(HDRP(bp)), PRED(bp), SUCC(bp));
@@ -416,11 +417,22 @@ void place(void *bp, size_t asize) {
   size_t size = GET_SIZE(HDRP(bp));
   if (size > asize && size - asize >= 2 * DSIZE) {
     size_t next_size = size - asize;
-    SET_SIZE(HDRP(bp), asize);
-    SET_SIZE(FTRP(bp), asize);
-    char *next = NEXT_BLKP(bp);
-    PUT(HDRP(next), PACK(next_size, 0));
-    PUT(FTRP(next), PACK(next_size, 0));
+    char *next;
+    if (split_back || SPLIT_BACK(asize, next_size)) {
+      SET_SIZE(HDRP(bp), asize);
+      SET_SIZE(FTRP(bp), asize);
+      next = NEXT_BLKP(bp);
+      PUT(HDRP(next), PACK(next_size, 0));
+      PUT(FTRP(next), PACK(next_size, 0));
+    } else {
+      next = bp;
+      PUT(HDRP(next), PACK(next_size, 0));
+      PUT(FTRP(next), PACK(next_size, 0));
+      bp = NEXT_BLKP(next);
+      SET_ALLOC(HDRP(bp));
+      SET_SIZE(HDRP(bp), asize);
+      SET_SIZE(FTRP(bp), asize);
+    }
     if (next_size < MINIMUM_TREE_BLOCK_SIZE) {
       INSERT(free_list_head, next);
     } else {
@@ -439,6 +451,7 @@ void place(void *bp, size_t asize) {
   DEBUG_INFO("[after place] checking list...\n ");
   find_fit(1 << 31);
 #endif
+  return bp;
 }
 
 /*
@@ -520,8 +533,7 @@ void *mm_realloc(void *ptr, size_t size) {
       SET_SIZE(HDRP(ptr), blocksize);
       SET_SIZE(FTRP(ptr), blocksize);
     }
-    place(ptr, asize);
-    return ptr;
+    return place(ptr, asize, true);
   }
 
   newptr = mm_malloc(size);
@@ -530,7 +542,7 @@ void *mm_realloc(void *ptr, size_t size) {
   }
 
   copysize = MIN(GET_SIZE(HDRP(ptr)), GET_SIZE(HDRP(newptr)));
-  memcpy(newptr, ptr, copysize - WSIZE);
+  memcpy(newptr, ptr, copysize - DSIZE);
   mm_free(ptr);
   return newptr;
 }
