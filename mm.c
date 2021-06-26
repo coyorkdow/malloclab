@@ -419,6 +419,7 @@ void *place(void *bp, size_t asize, bool split_back) {
   find_fit(1 << 31);
 #endif
   SET_ALLOC(HDRP(bp));
+  SET_ALLOC(FTRP(bp));
   size_t size = GET_SIZE(HDRP(bp));
   if (size > asize && size - asize >= 2 * DSIZE) {
     size_t next_size = size - asize;
@@ -438,7 +439,9 @@ void *place(void *bp, size_t asize, bool split_back) {
       SET_SIZE(HDRP(bp), asize);
       SET_SIZE(FTRP(bp), asize);
     }
-    if (next_size < MINIMUM_TREE_BLOCK_SIZE) {
+    SET_ALLOC(FTRP(bp));
+    next = coalesce(next);
+    if (BP_LESS(next, MINIMUM_TREE_BLOCK_SIZE)) {
       INSERT(free_list_head, next);
     } else {
       tree_insert(&tree_root, next);
@@ -451,7 +454,6 @@ void *place(void *bp, size_t asize, bool split_back) {
     find_fit(1 << 31);
 #endif
   }
-  SET_ALLOC(FTRP(bp));
 #ifdef DEBUG
   DEBUG_INFO("[after place] checking list...\n ");
   find_fit(1 << 31);
@@ -521,7 +523,6 @@ void *mm_realloc(void *ptr, size_t size) {
     return NULL;
   }
   void *newptr;
-  size_t copysize;
   size_t asize;
   if (size <= DSIZE) {
     asize = 2 * DSIZE;
@@ -529,25 +530,66 @@ void *mm_realloc(void *ptr, size_t size) {
     asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
   }
 
-  size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
-  size_t blocksize =
-      GET_SIZE(HDRP(ptr)) + (next_alloc ? 0 : GET_SIZE(HDRP(NEXT_BLKP(ptr))));
+  size_t next_available_size =
+      GET_ALLOC(HDRP(NEXT_BLKP(ptr))) ? 0 : GET_SIZE(HDRP(NEXT_BLKP(ptr)));
+  size_t prev_available_size =
+      GET_ALLOC(HDRP(PREV_BLKP(ptr))) ? 0 : GET_SIZE(HDRP(PREV_BLKP(ptr)));
+  size_t blocksize = GET_SIZE(HDRP(ptr));
+
+#define COALESCE_NEXT                                    \
+  do {                                                   \
+    ERASE_FROM_TREE_OR_LIST(&tree_root, NEXT_BLKP(ptr)); \
+    blocksize += next_available_size;                    \
+    SET_SIZE(HDRP(ptr), blocksize);                      \
+    SET_SIZE(FTRP(ptr), blocksize);                      \
+  } while (0)
+
+#define COALESCE_PREV                                    \
+  do {                                                   \
+    ERASE_FROM_TREE_OR_LIST(&tree_root, PREV_BLKP(ptr)); \
+    char *oldptr = ptr;                                  \
+    ptr = PREV_BLKP(ptr);                                \
+    memmove(ptr, oldptr, blocksize - DSIZE);             \
+    blocksize += prev_available_size;                    \
+    SET_SIZE(HDRP(ptr), blocksize);                      \
+    SET_SIZE(FTRP(ptr), blocksize);                      \
+  } while (0)
+
   if (blocksize >= asize) {
-    if (!next_alloc) {
-      ERASE_FROM_TREE_OR_LIST(&tree_root, NEXT_BLKP(ptr));
-      SET_SIZE(HDRP(ptr), blocksize);
-      SET_SIZE(FTRP(ptr), blocksize);
-    }
     return place(ptr, asize, true);
+  } else if (blocksize + next_available_size >= asize) {
+    COALESCE_NEXT;
+    return place(ptr, asize, true);
+  } else if (blocksize + prev_available_size >= asize) {
+    COALESCE_PREV;
+    return place(ptr, asize, true);
+  } else if (blocksize + next_available_size + prev_available_size >= asize) {
+    COALESCE_NEXT;
+    COALESCE_PREV;
+    return place(ptr, asize, true);
+  }
+
+  if (prev_available_size) COALESCE_PREV;
+  if (next_available_size) COALESCE_NEXT;
+  // Check if ptr points to the last block of the heap, ptr may be NULL
+  if (NEXT_BLKP(heap_epilogue) == ptr) {
+    if (mm_malloc(size - blocksize) == NULL) {
+      return NULL;
+    }
+    blocksize += GET_SIZE(NEXT_BLKP(ptr));
+    SET_SIZE(HDRP(ptr), blocksize);
+    SET_SIZE(FTRP(ptr), blocksize);
+    return ptr;
   }
 
   newptr = mm_malloc(size);
   if (ptr == NULL || newptr == NULL) {
     return newptr;
   }
-
-  copysize = MIN(GET_SIZE(HDRP(ptr)), GET_SIZE(HDRP(newptr)));
-  memcpy(newptr, ptr, copysize - DSIZE);
+  memcpy(newptr, ptr, blocksize - DSIZE);
   mm_free(ptr);
   return newptr;
+
+#undef COALESCE_PREV
+#undef COALESCE_NEXT
 }
