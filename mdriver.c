@@ -137,6 +137,9 @@ static void app_error(char *msg);
  **************/
 int main(int argc, char **argv)
 {
+#ifdef DEBUG
+    freopen("out", "w", stdout);
+#endif
     int i;
     char c;
     char **tracefiles = NULL;  /* null-terminated array of trace file names */
