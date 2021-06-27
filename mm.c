@@ -335,11 +335,7 @@ static void *extend_heap(size_t words) {
   return coalesce(bp);
 }
 
-/*
- * mm_malloc - Allocate a block by incrementing the brk pointer.
- *     Always allocate a block whose size is a multiple of the alignment.
- */
-void *mm_malloc(size_t size) {
+void *mm_malloc_wrapped(size_t size, bool realloc) {
   size_t asize;      /* Adjusted block size */
   size_t extendsize; /* Amount to extend heap if no fit */
   char *bp;
@@ -369,7 +365,7 @@ void *mm_malloc(size_t size) {
   DEBUG_INFO("No fit found. Get more memory and place the block\n");
 #endif
   extendsize = MAX(asize, CHUNKSIZE);
-  if (!GET_TAG(heap_epilogue)) {
+  if (!realloc && !GET_TAG(heap_epilogue)) {
     extendsize -= GET_SIZE(heap_epilogue - WSIZE);
   }
   if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
@@ -377,6 +373,12 @@ void *mm_malloc(size_t size) {
   }
   return place(bp, asize, false);
 }
+
+/*
+ * mm_malloc - Allocate a block by incrementing the brk pointer.
+ *     Always allocate a block whose size is a multiple of the alignment.
+ */
+void *mm_malloc(size_t size) { return mm_malloc_wrapped(size, false); }
 
 /*
  * find_fit - Perform a first-fit search of the implicit free list.
@@ -637,7 +639,7 @@ void *mm_realloc(void *ptr, size_t size) {
     return ptr;
   }
 
-  if ((newptr = mm_malloc(size)) == NULL) {
+  if ((newptr = mm_malloc_wrapped(size, true)) == NULL) {
     return newptr;
   }
   memcpy(newptr, ptr, blocksize - WSIZE);
