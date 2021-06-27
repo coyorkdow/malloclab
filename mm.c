@@ -69,6 +69,9 @@ team_t team = {
 // Read the size and allocation bit from address p
 #define GET_SIZE(p) (GET(p) & ~0x7)
 #define GET_ALLOC(p) (GET(p) & 0x1)
+
+// Tag for foot compression, which indicates whether the previous block
+// was allocated or not.
 #define GET_TAG(p) (GET(p) & 0x2)
 
 // Set or clear allocation bit
@@ -547,9 +550,14 @@ void *mm_realloc(void *ptr, size_t size) {
   DEBUG_INFO("\n[before realloc] ptr is %p, size = %u\n", ptr, size);
   assert(GET_TAG(HDRP(NEXT_BLKP(ptr))));
 #endif
-  if (ptr == NULL && size == 0) {
+  if (ptr == NULL) {
+    return mm_malloc(size);
+  }
+  if (size == 0) {
+    mm_free(ptr);
     return NULL;
   }
+
   void *newptr;
   size_t asize = size_in_need(size);
 
@@ -579,18 +587,28 @@ void *mm_realloc(void *ptr, size_t size) {
     SET_SIZE(FTRP(ptr), blocksize);                      \
   } while (0)
 
+#define TRIVAL_PLACE(bp)          \
+  do {                            \
+    SET_ALLOC(HDRP(bp));          \
+    SET_TAG(HDRP(NEXT_BLKP(bp))); \
+  } while (0)
+
   if (blocksize >= asize) {
-    return place(ptr, asize, true);
+    TRIVAL_PLACE(ptr);
+    return ptr;
   } else if (blocksize + next_available_size >= asize) {
     COALESCE_NEXT;
-    return place(ptr, asize, true);
+    TRIVAL_PLACE(ptr);
+    return ptr;
   } else if (blocksize + prev_available_size >= asize) {
     COALESCE_PREV;
-    return place(ptr, asize, true);
+    TRIVAL_PLACE(ptr);
+    return ptr;
   } else if (blocksize + next_available_size + prev_available_size >= asize) {
     COALESCE_NEXT;
     COALESCE_PREV;
-    return place(ptr, asize, true);
+    TRIVAL_PLACE(ptr);
+    return ptr;
   }
 
   if (prev_available_size) {
@@ -606,18 +624,20 @@ void *mm_realloc(void *ptr, size_t size) {
     COALESCE_NEXT;
   }
   // Check if ptr points to the last block of the heap, ptr may be NULL
-  if (NEXT_BLKP(heap_epilogue) == ptr) {
-    if (mm_malloc(size - blocksize) == NULL) {
+  if (HDRP(NEXT_BLKP(ptr)) == heap_epilogue) {
+    TRIVAL_PLACE(ptr);
+    char *bp;
+    if ((bp = extend_heap((asize - blocksize) / WSIZE)) == NULL) {
       return NULL;
     }
-    blocksize += GET_SIZE(NEXT_BLKP(ptr));
+    blocksize += GET_SIZE(HDRP(NEXT_BLKP(ptr)));
     SET_SIZE(HDRP(ptr), blocksize);
     SET_SIZE(FTRP(ptr), blocksize);
+    SET_TAG(HDRP(NEXT_BLKP(ptr)));
     return ptr;
   }
 
-  newptr = mm_malloc(size);
-  if (ptr == NULL || newptr == NULL) {
+  if ((newptr = mm_malloc(size)) == NULL) {
     return newptr;
   }
   memcpy(newptr, ptr, blocksize - WSIZE);
@@ -626,7 +646,7 @@ void *mm_realloc(void *ptr, size_t size) {
 #endif
   mm_free(ptr);
   return newptr;
-
+#undef TRIVAL_PLACE
 #undef COALESCE_PREV
 #undef COALESCE_NEXT
 }
