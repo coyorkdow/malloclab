@@ -1,0 +1,3 @@
+[submodule "TinyCLog"]
+	path = TinyCLog
+	url = https://github.com/coyorkdow/TinyCLog.git

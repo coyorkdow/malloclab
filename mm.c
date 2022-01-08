@@ -20,6 +20,8 @@
 
 #include "memlib.h"
 
+#include "tiny_c_log/log_posix.h"
+
 /*********************************************************
  * NOTE TO STUDENTS: Before you do anything else, please
  * provide your team information in the following struct.
@@ -36,11 +38,6 @@ team_t team = {
     /* Second member's email address (leave blank if none) */
     ""};
 
-#define DEBUG_INFO(f_, ...)      \
-  do {                           \
-    printf((f_), ##__VA_ARGS__); \
-    fflush(stdout);              \
-  } while (0)
 
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
@@ -164,24 +161,16 @@ char *NIL = 0; /* NIL must be initialized before use any of BST */
 static char *tree_lower_bound(char *root, size_t size) {
   char *r = NIL;
   char *ptr = root;
-#ifdef DEBUG
-  DEBUG_INFO("\n[tree lower_bound] NIL is %p, root is %p, size = %u\n", NIL,
+  LOG_DEBUG("\n[tree lower_bound] NIL is %p, root is %p, size = %u\n", NIL,
              root, size);
-#endif
   while (ptr != NIL && size != GET_SIZE(HDRP(ptr))) {
-#ifdef DEBUG
-    DEBUG_INFO("ptr = %p, lch = %p, rch = %p, parent = %p, size = %u", ptr,
+    LOG_DEBUG("ptr = %p, lch = %p, rch = %p, parent = %p, size = %u", ptr,
                LCH(ptr), RCH(ptr), PARENT(ptr), GET_SIZE(HDRP(ptr)));
-#endif
     if (GET_SIZE(HDRP(ptr)) < size) {
-#ifdef DEBUG
-      DEBUG_INFO("  to rch\n");
-#endif
+      LOG_DEBUG("  to rch\n");
       ptr = RCH(ptr);
     } else {
-#ifdef DEBUG
-      DEBUG_INFO("  to lch\n");
-#endif
+      LOG_DEBUG("  to lch\n");
       r = ptr;
       ptr = LCH(ptr);
     }
@@ -196,30 +185,22 @@ static char *tree_lower_bound(char *root, size_t size) {
 }
 
 static void tree_insert(char **root, char *ptr) {
-#ifdef DEBUG
-  DEBUG_INFO("\n[tree insert] NIL is %p, root is %p, ptr = %p\n", NIL, root,
+  LOG_DEBUG("\n[tree insert] NIL is %p, root is %p, ptr = %p\n", NIL, root,
              ptr);
-#endif
   SET_LCH(ptr, NIL);
   SET_RCH(ptr, NIL);
   char *y = NIL;
   char *x = *root;
   size_t size = GET_SIZE(HDRP(ptr));
   while (x != NIL) {
-#ifdef DEBUG
-    DEBUG_INFO("x = %p, lch = %p, rch = %p, parent = %p, size = %u", x, LCH(x),
+    LOG_DEBUG("x = %p, lch = %p, rch = %p, parent = %p, size = %u", x, LCH(x),
                RCH(x), PARENT(x), GET_SIZE(HDRP(x)));
-#endif
     y = x;
     if (GET_SIZE(HDRP(x)) < size) {
-#ifdef DEBUG
-      DEBUG_INFO("  to rch\n");
-#endif
+      LOG_DEBUG("  to rch\n");
       x = RCH(x);
     } else {
-#ifdef DEBUG
-      DEBUG_INFO("  to lch\n");
-#endif
+      LOG_DEBUG("  to lch\n");
       x = LCH(x);
     }
   }
@@ -361,9 +342,7 @@ void *mm_malloc_wrapped(size_t size, bool realloc) {
 
   /* No fit found. Get more memory and place the block */
 
-#ifdef DEBUG
-  DEBUG_INFO("No fit found. Get more memory and place the block\n");
-#endif
+  LOG_DEBUG("No fit found. Get more memory and place the block\n");
   extendsize = MAX(asize, CHUNKSIZE);
   if (!realloc && !GET_TAG(heap_epilogue)) {
     extendsize -= GET_SIZE(heap_epilogue - WSIZE);
@@ -386,7 +365,7 @@ void *mm_malloc(size_t size) { return mm_malloc_wrapped(size, false); }
 void *find_fit(size_t asize) {
   char *ptr = free_list_head;
 #ifdef DEBUG
-  DEBUG_INFO("head_ptr = %p, pred = %p, succ = %p\n", ptr, PRED(ptr),
+  LOG_DEBUG("head_ptr = %p, pred = %p, succ = %p\n", ptr, PRED(ptr),
              SUCC(ptr));
   int cnt = 0;
 #endif
@@ -394,11 +373,11 @@ void *find_fit(size_t asize) {
 #ifdef DEBUG
     cnt++;
     if (cnt == 10000) exit(1);
-    DEBUG_INFO("cur = %p, pred = %p, succ = %p\n", ptr, PRED(ptr), SUCC(ptr));
+    LOG_DEBUG("cur = %p, pred = %p, succ = %p\n", ptr, PRED(ptr), SUCC(ptr));
 #endif
     if (GET_SIZE(HDRP(ptr)) >= asize) {
 #ifdef DEBUG
-      DEBUG_INFO("[fit]  allocated = %d, addr = %p, size = %u, asize = %u\n",
+      LOG_DEBUG("[fit]  allocated = %d, addr = %p, size = %u, asize = %u\n",
                  GET_ALLOC(HDRP(ptr)), ptr, GET_SIZE(HDRP(ptr)), asize);
       if (GET_SIZE(HDRP(ptr)) >= MINIMUM_TREE_BLOCK_SIZE) exit(1);
 #endif
@@ -406,7 +385,7 @@ void *find_fit(size_t asize) {
       return ptr;
     }
 #ifdef DEBUG
-    DEBUG_INFO("[skip]  allocated = %d, addr = %p, size = %u, asize = %u\n",
+    LOG_DEBUG("[skip]  allocated = %d, addr = %p, size = %u, asize = %u\n",
                GET_ALLOC(HDRP(ptr)), ptr, GET_SIZE(HDRP(ptr)), asize);
     if (GET_SIZE(HDRP(ptr)) >= MINIMUM_TREE_BLOCK_SIZE) exit(1);
 #endif
@@ -421,9 +400,9 @@ void *find_fit(size_t asize) {
  */
 void *place(void *bp, size_t asize, bool trivial_split) {
 #ifdef DEBUG
-  DEBUG_INFO("\n[before place] ptr is %p, size = %u, pred = %p, succ = %p,", bp,
+  LOG_DEBUG("\n[before place] ptr is %p, size = %u, pred = %p, succ = %p,", bp,
              GET_SIZE(HDRP(bp)), PRED(bp), SUCC(bp));
-  DEBUG_INFO("  checking list...\n ");
+  LOG_DEBUG("  checking list...\n ");
   find_fit(1 << 31);
   if (!trivial_split) {
     assert(GET_TAG(HDRP(bp)));
@@ -459,7 +438,7 @@ void *place(void *bp, size_t asize, bool trivial_split) {
       tree_insert(&tree_root, next);
     }
 #ifdef DEBUG
-    DEBUG_INFO(
+    LOG_DEBUG(
         "[splitting] next ptr is %p, asize = %u, next_size = %u, checking "
         "list...\n",
         next, asize, next_size);
@@ -477,7 +456,7 @@ void *place(void *bp, size_t asize, bool trivial_split) {
   SET_TAG(HDRP(NEXT_BLKP(bp)));
 #ifdef DEBUG
   assert(GET_TAG(HDRP(NEXT_BLKP(bp))));
-  DEBUG_INFO("[after place] checking list...\n ");
+  LOG_DEBUG("[after place] checking list...\n ");
   find_fit(1 << 31);
 #endif
   return bp;
@@ -488,7 +467,7 @@ void *place(void *bp, size_t asize, bool trivial_split) {
  */
 void mm_free(void *ptr) {
 #ifdef DEBUG
-  DEBUG_INFO("\n[before free] ptr is %p, checking list...\n", ptr);
+  LOG_DEBUG("\n[before free] ptr is %p, checking list...\n", ptr);
   find_fit(1 << 31);
   assert(GET_TAG(HDRP(NEXT_BLKP(ptr))));
 #endif
@@ -509,7 +488,7 @@ void mm_free(void *ptr) {
     tree_insert(&tree_root, ptr);
   }
 #ifdef DEBUG
-  DEBUG_INFO("[after free] ptr is %p, checking list...\n", ptr);
+  LOG_DEBUG("[after free] ptr is %p, checking list...\n", ptr);
   find_fit(1 << 31);
 #endif
 }
@@ -549,7 +528,7 @@ static void *coalesce(void *bp) {
  */
 void *mm_realloc(void *ptr, size_t size) {
 #ifdef DEBUG
-  DEBUG_INFO("\n[before realloc] ptr is %p, size = %u\n", ptr, size);
+  LOG_DEBUG("\n[before realloc] ptr is %p, size = %u\n", ptr, size);
   assert(GET_TAG(HDRP(NEXT_BLKP(ptr))));
 #endif
   if (ptr == NULL) {
@@ -614,15 +593,11 @@ void *mm_realloc(void *ptr, size_t size) {
   }
 
   if (prev_available_size) {
-#ifdef DEBUG
-    DEBUG_INFO("COALESCE_PREV");
-#endif
+    LOG_DEBUG("COALESCE_PREV");
     COALESCE_PREV;
   }
   if (next_available_size) {
-#ifdef DEBUG
-    DEBUG_INFO("COALESCE_NEXT");
-#endif
+    LOG_DEBUG("COALESCE_NEXT");
     COALESCE_NEXT;
   }
   // Check if ptr points to the last block of the heap, ptr may be NULL
@@ -643,9 +618,7 @@ void *mm_realloc(void *ptr, size_t size) {
     return newptr;
   }
   memcpy(newptr, ptr, blocksize - WSIZE);
-#ifdef DEBUG
-  DEBUG_INFO("[after realloc] free ptr...\n");
-#endif
+  LOG_DEBUG("[after realloc] free ptr...\n");
   mm_free(ptr);
   return newptr;
 #undef TRIVAL_PLACE
